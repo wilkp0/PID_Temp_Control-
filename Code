@@ -4,12 +4,12 @@
 double averager[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; //Array for averaging values
 double averager_input[8] = { 0, 0, 0, 0, 0, 0, 0, 0 }; //Array for averaging values
 //Declarations
-float average_TEMP = 0; //Average temperature sent through UART
-float average_pot_temp = 0;
-float ADC_Voltage = 0; //Calculated voltage from digital signal
-float ADC_Temp = 0; //Temperature with decimal points
-float pot_voltage = 0;
-float pot_temp = 0;
+float average_TEMP = 0;             //Average temperature after 16-point moving average filter
+float average_pot_temp = 0;         //Average potentiometer temperature conversion after 8-point moving average filter
+float ADC_Voltage = 0;              //Calculated voltage from digital signal
+float ADC_Temp = 0;                 //Temperature with decimal points
+float pot_voltage = 0;              //Potentiometer voltage reading
+float pot_temp = 0;                 //Potentiometer temperature conversion
 volatile float error;
 volatile float previousError;
 volatile float gain;
@@ -17,13 +17,13 @@ volatile float deriv_kd;
 volatile float integral_ki;
 volatile float integral;
 volatile float derivative;
-volatile float kp = 155.5;
-volatile float ki = 0.5;
-volatile float kd = 5;
-volatile float dt = 0.01;
-float PID_pwm = 0;
-float pwm = 0;
-float perBit = 3.3 / 4096; //Constant for converting digital signal to analog sampled voltage
+volatile float kp = 155.5;          //Kp value
+volatile float ki = 0.5;            //Ki value
+volatile float kd = 5;              //Kd value
+volatile float dt = 0.01;           //Difference in time
+float PID_pwm = 0;                  //PWM when PID controller is activated
+float pwm = 0;                      //PWM at all times
+float perBit = 3.3 / 4096;          //Constant for converting digital signal to analog sampled voltage
 
 void ADC_Setup();
 void PWM_Setup();
@@ -31,39 +31,39 @@ void input_TEMP();
 
 void ADC_Setup()
 {
-    P6SEL = 0x0F;                             // Enable A/D channel inputs
-    ADC12CTL0 = ADC12ON+ADC12MSC+ADC12SHT0_8; // Turn on ADC12, extend sampling time
-                                            // to avoid overflow of results
-    ADC12CTL1 = ADC12SHP+ADC12CONSEQ_3;       // Use sampling timer, repeated sequence
-    ADC12MCTL0 = ADC12INCH_0;                 // ref+=AVcc, channel = A0
-    ADC12MCTL1 = ADC12INCH_1;                 // ref+=AVcc, channel = A1
-    ADC12MCTL2 = ADC12INCH_2;                 // ref+=AVcc, channel = A2
-    ADC12MCTL3 = ADC12INCH_3+ADC12EOS;        // ref+=AVcc, channel = A3, end seq.
-    ADC12IE = 0x08;                           // Enable ADC12IFG.3
-    ADC12CTL0 |= ADC12ENC;                    // Enable conversions
-    ADC12CTL0 |= ADC12SC;                     // Start convn - software trigger
+    P6SEL = 0x0F;                               // Enable A/D channel inputs
+    ADC12CTL0 = ADC12ON+ADC12MSC+ADC12SHT0_8;   // Turn on ADC12, extend sampling time
+                                                // to avoid overflow of results
+    ADC12CTL1 = ADC12SHP+ADC12CONSEQ_3;         // Use sampling timer, repeated sequence
+    ADC12MCTL0 = ADC12INCH_0;                   // ref+=AVcc, channel = A0
+    ADC12MCTL1 = ADC12INCH_1;                   // ref+=AVcc, channel = A1
+    ADC12MCTL2 = ADC12INCH_2;                   // Ignored, sample code
+    ADC12MCTL3 = ADC12INCH_3+ADC12EOS;          // Ignored, sample code
+    ADC12IE = 0x08;                             // Enable ADC12IFG.3
+    ADC12CTL0 |= ADC12ENC;                      // Enable conversions
+    ADC12CTL0 |= ADC12SC;                       // Start convn - software trigger
 
 }
 
 void PWM_Setup()
 {
-    P1DIR |= BIT3;                            // P2.5 output
-    P1SEL |= BIT3;                            // 2.5 TA2.2
-    TA0CTL = TASSEL_2 + MC_1 + TACLR;         // SMCLK, up mode, clear timer
-    TA0CCR0 = 999;                            // PWM Period, 1kHz
-    TA0CCR2 = 0;                            // Initial PWM set at 20%
-    TA0CCTL2 = OUTMOD_3;                      // Hardware PWM, CCR2 toggle/set
+    P1DIR |= BIT3;                              // P1.3 output
+    P1SEL |= BIT3;                              // 1.3 TA0.0
+    TA0CTL = TASSEL_2 + MC_1 + TACLR;           // SMCLK, up mode, clear timer
+    TA0CCR0 = 999;                              // PWM Period, 1kHz
+    TA0CCR2 = 0;                                // Initial PWM set at 0%
+    TA0CCTL2 = OUTMOD_3;                        // Hardware PWM, CCR2 toggle/set
 }
 
 void inputTEMP()
 {
-    ADC_Voltage = ADC12MEM1 * perBit; //Conversion from binary sampled voltage to actual
-    ADC_Temp = ADC_Voltage * 100; //Equation for PTAT, voltage => temperature in C
+    ADC_Voltage = ADC12MEM1 * perBit;           //Conversion from binary sampled voltage to analog voltage
+    ADC_Temp = ADC_Voltage * 100;               //Equation for PTAT, voltage => temperature in C
 
-    pot_voltage = ADC12MEM0 * perBit; //Conversion from binary sampled voltage to actual
-    pot_temp = 0.5 + pot_voltage * 100; //Conversion for potentiometer input voltage to desired temperature
+    pot_voltage = ADC12MEM0 * perBit;           //Conversion from binary sampled voltage to analog voltage
+    pot_temp = 0.5 + pot_voltage * 100;         //Conversion for potentiometer input voltage to desired temperature with 0.5V offset
 
-
+    //16-point Moving Average Filter for PTAT Readings
     averager[15] = averager[14];
     averager[14] = averager[13];
     averager[13] = averager[12];
@@ -79,10 +79,12 @@ void inputTEMP()
     averager[3] = averager[2];
     averager[2] = averager[1];
     averager[1] = averager[0];
-    averager[0] = ADC_Temp; //First value in array is the current temperature reading
+    averager[0] = ADC_Temp;                     //First value in array is the current temperature reading
+
     //Average calculated by SUM/16
     average_TEMP = (averager[15] + averager[14] + averager[13] + averager[12] + averager[11] + averager[10] + averager[9] + averager[8] + averager[7] + averager[6] + averager[5] + averager[4] + averager[3] + averager[2] + averager[1] + averager[0]) / 16;
 
+    //8-Point Moving Average Filter for Potentiometer Readings
     averager_input[7] = averager_input[6];
     averager_input[6] = averager_input[5];
     averager_input[5] = averager_input[4];
@@ -91,6 +93,8 @@ void inputTEMP()
     averager_input[2] = averager_input[1];
     averager_input[1] = averager_input[0];
     averager_input[0] = pot_temp; //First value in array is the current temperature reading
+
+    //Average calculated by SUM/8
     average_pot_temp = (averager_input[7] + averager_input[6] + averager_input[5] + averager_input[4]
     + averager_input[3] + averager_input[2] + averager_input[1] + averager_input[0]) / 8;
 
@@ -98,13 +102,13 @@ void inputTEMP()
 
 int main(void)
 {
-    WDTCTL = WDTPW + WDTHOLD;                 // Stop WDT
-    PWM_Setup(); //PWM function call
-    ADC_Setup(); //ADC function call
+    WDTCTL = WDTPW + WDTHOLD;               // Stop WDT
+    PWM_Setup();                            //PWM function call
+    ADC_Setup();                            //ADC function call
 
     while (1)
     {
-        ADC12CTL0 |= ADC12SC;                   // Start sampling/conversion
+        ADC12CTL0 |= ADC12SC;               // Start sampling/conversion
         __bis_SR_register(LPM0_bits + GIE);
     }
 }
@@ -122,45 +126,45 @@ __interrupt void ADC12_ISR(void)
         break;                           // Vector  2:  ADC overflow
     case 4:
         break;                           // Vector  4:  ADC timing overflow
-    case 6:                                  // Vector  6:  ADC12IFG0
-        break;
+    case 6:
+        break;                           // Vector  6:  ADC12IFG0
     case 8:
         break;                           // Vector  8:  ADC12IFG1
     case 10:
         break;                           // Vector 10:  ADC12IFG2
     case 12:
-        inputTEMP();
-        previousError = error;
-        error = average_pot_temp - average_TEMP; //Calculates difference between the desired and current temp
-        integral += error * dt; // Integral
-        derivative = (error - previousError) / dt; // Derivative
-        gain = kp * error;
-        integral_ki = ki * integral;
-        deriv_kd = kd * derivative;
+        inputTEMP();                                //Calls the inputTEMP function for calculating voltages/averages
+        previousError = error;                      //Stores error into a previousError variables
+        error = average_pot_temp - average_TEMP;    //Calculates difference between the desired and current temp
+        integral += error * dt; // Integral         //Rolling sum for PI controller
+        derivative = (error - previousError) / dt;  //Derivative for PD controller
+        gain = kp * error;                          //Variable for Gain controller
+        integral_ki = ki * integral;                //Variable for PI controller
+        deriv_kd = kd * derivative;                 //Variable for PD controller
 
-        if (error > 5)
+        if (error > 5)                              //If desired temp is greater then 5 more degrees then current temp
         {
-            pwm = 0; // Fan is off
+            pwm = 0;                                //Fan is off
         }
-        else if (abs(error) <= 5)
+        else if (abs(error) <= 5)                   //If desired temp is within 5 degrees of current temp
         {
-            PID_pwm = 500 - (gain + (ki * integral) + (kd * derivative)); // PID Controller;
-            pwm = PID_pwm;
-            if (PID_pwm > 999)
+            PID_pwm = 500 - (gain + (ki * integral) + (kd * derivative));   // PID Controller
+            pwm = PID_pwm;                          //Set PWM equal to PID controlled pwm
+            if (PID_pwm > 999)                      //If PID pwm is greater then max value, set to max PWM
             {
-                pwm = 999;
+                pwm = 999;                          //Fan on full blast
             }
-            else if (PID_pwm < 0)
+            else if (PID_pwm < 0)                   //If PID pwm is less then min value, set to min PWM
             {
-                pwm = 0;
+                pwm = 0;                            //Fan is off
             }
         }
-        else if (error < -5)
+        else if (error < -5)                        //If desired temp is less then 5 less degrees then current temp
         {
-            pwm = 999; // Fan is on
+            pwm = 999;                              // Fan on full blast
         }
-        TA0CCR2 = pwm;
-        //__bic_SR_register_on_exit(LPM0_bits);   // Exit active CPU
+        TA0CCR2 = pwm;                              //Set PWM controlled CCR register to pwm variable
+
         break;                           // Vector 12:  ADC12IFG3
     case 14:
         break;                           // Vector 14:  ADC12IFG4
