@@ -29,6 +29,9 @@ void ADC_Setup();
 void PWM_Setup();
 void input_TEMP();
 
+//ADC_Setup copyright to Bhargazi Nisarga 
+//from the TI Resource Explorer 
+//MSP430F55xx_adc_09.c
 void ADC_Setup()
 {
     P6SEL = 0x0F;                               // Enable A/D channel inputs
